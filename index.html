@@ -1,0 +1,55 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Shift Roster</title>
+<style>
+body{font:13px system-ui;margin:12px;color:#222}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.wrap{overflow:auto;max-height:68vh;border:1px solid #ccc}
+table{border-collapse:collapse}th,td{border:1px solid #bbb;padding:3px 6px;text-align:center;white-space:nowrap}
+th{background:#1f3864;color:#fff;position:sticky;top:0}td.n{text-align:left;background:#fff;position:sticky;left:0}
+td.c{cursor:pointer;min-width:42px}.ocr td{background:#e4d4f4;font-weight:600}
+.S1{background:#bfe3c0}.S2{background:#9fd0f0}.S3{background:#f5b83d}.WO{background:#f0f03c}.WFO{background:#e8663d}
+.PL{background:#e33}.UL{background:#a00;color:#fff}.GH{background:#7b2fbf;color:#fff}.CO{background:#ccc}
+.we{filter:brightness(.97)}#alert{background:#fff3cd;border:1px solid #e0b800;padding:8px;margin:8px 0;display:none}
+.leg span{padding:2px 8px;margin-right:4px;border:1px solid #999}
+@media print{.bar,#alert,.audit{display:none}.wrap{max-height:none}}
+</style></head><body>
+<h2>Shift Roster &amp; On-Call</h2>
+<div class="bar">
+ <input type="month" id="ym" value="2026-11"><select id="team"><option value="">All teams</option></select>
+ <input id="wfo" placeholder="WFO EmpIDs, e.g. EMP003,EMP004" size="28" title="These people are auto-assigned WFO every weekday"><input id="hol" placeholder="Holidays YYYY-MM-DD,..." size="26">
+ <button onclick="gen()">Generate month</button><button onclick="load()">Refresh</button>
+ <button onclick="location='/api/export.xlsx?ym='+ym.value+'&team='+team.value">Export Excel</button>
+ <button onclick="print()">PDF (print)</button>
+</div>
+<div class="bar">Leave: <input id="le" placeholder="EmpID" size="8"><input id="ld" type="date">
+ <select id="lc"><option>UL</option><option>PL</option><option>CO</option></select><button onclick="leave()">Apply</button>
+ <span class="leg" id="leg"></span></div>
+<div id="alert"></div><div class="wrap"><table id="g"></table></div>
+<p>Click a cell to override (audit-logged). Each On-Call row shows the team's weekly on-call; * = backup covering an absent day. S1/S2 = WFO, S3 = WFH.</p>
+<h4 class="audit">Audit log</h4><pre class="audit" id="au"></pre>
+<script>
+const $=id=>document.getElementById(id),J=(u,b)=>fetch(u,b&&{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
+const codes=['S1','S2','S3','WO','WFO','PL','UL','GH','CO','OC'];
+$('leg').innerHTML=codes.slice(0,9).map(c=>`<span class="${c}">${c}</span>`).join('');
+async function load(){
+ const r=await J(`/api/roster?ym=${ym.value}&team=${team.value}`);
+ if(team.options.length==1)r.teams.forEach(t=>team.add(new Option(t,t)));
+ if(!wfo.value)wfo.value=r.wfo.join(',');
+ let h='<tr><th>EmpID</th><th>Name</th>'+r.dates.map(d=>{const x=new Date(d);return`<th>${x.getDate()}<br>${'SMTWTFS'[x.getDay()]}</th>`}).join('')+'</tr>',t='';
+ r.rows.forEach(e=>{if(e.team!=t){t=e.team;h+=`<tr><td class="n" colspan="${r.dates.length+2}"><b>${t}</b></td></tr>`;
+  if(r.oc[t])h+=`<tr class="ocr"><td class="n">On-Call</td><td class="n">${t}</td>`+r.dates.map(d=>{const o=r.oc[t][d];return o?`<td title="${o.name}">${o.name.split(' ')[0]}${o.backup?'*':''}</td>`:'<td></td>'}).join('')+'</tr>'}
+  h+=`<tr><td class="n">${e.id}</td><td class="n">${e.name}</td>`+e.cells.map((k,i)=>`<td class="c ${k}" onclick="ov('${e.id}','${r.dates[i]}','${k}')">${k}</td>`).join('')+'</tr>'});
+ g.innerHTML=h; $('au').textContent=(await J('/api/audit')).map(a=>`${a.ts} ${a.user}: ${a.emp} ${a.d} ${a.old}->${a.new} ${a.reason}`).join('\n');
+}
+async function gen(){const w=wfo.value.split(',').map(s=>s.trim()).filter(Boolean);
+ if(!w.length&&!confirm('No WFO persons entered. Continue with none?'))return;
+ await J('/api/generate',{ym:ym.value,wfo:w,holidays:hol.value.split(',').map(s=>s.trim()).filter(Boolean)});load()}
+async function ov(e,d,k){const c=prompt(`${e} ${d} (now ${k})\nNew code: ${codes.join(', ')}`);if(!c)return;
+ await J('/api/override',{emp:e,d,code:c.toUpperCase(),reason:prompt('Reason?')||''});load()}
+async function leave(){const r=await J('/api/leave',{emp:le.value.toUpperCase(),d:ld.value,code:lc.value});load();const a=$('alert');
+ if(r.detail){alert(r.detail);return}
+ if(!r.messages.length){a.style.display='none';return}
+ a.style.display='block';a.innerHTML=r.messages.map(m=>`<div>⚠ ${m}</div>`).join('')+r.needs.map(n=>`<div>Cover <b>${n}</b>: `+(r.suggestions.map(s=>
+  `<button title="${s.note}" onclick="cover('${s.emp}','${ld.value}','${n}')">${s.name} (${s.team}) - ${s.note}</button>`).join(' ')||'no safe option')+'</div>').join('')}
+async function cover(e,d,n){await J('/api/override',{emp:e,d,code:n,reason:'UL cover'});$('alert').style.display='none';load()}
+load();
+</script></body></html>
